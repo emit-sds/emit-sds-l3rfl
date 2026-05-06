@@ -163,6 +163,8 @@ def main():
     parser.add_argument('--log_file', type=str, default=None, help="Logging file to write to")
     parser.add_argument('--log_level', type=str, default="INFO", help="Logging level")
     parser.add_argument('--chunksize', type=int, nargs=3, default=None, help="Chunk size for netCDF compression as (bands, lat, lon)")
+    parser.add_argument('--complevel', type=int, default=1, help="netCDF compression level (1-9)")
+    parser.add_argument('--compress', action='store_true', default=False, help="Enable zlib compression")
     args = parser.parse_args()
 
     if args.log_file is None:
