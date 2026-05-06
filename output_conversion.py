@@ -1,15 +1,14 @@
 import argparse
 import logging
 
-import netCDF4
+from osgeo import osr
 import numpy as np
 from netCDF4 import Dataset
-from osgeo import gdal, osr
-from scipy.ndimage import binary_fill_holes
 from scipy.spatial import cKDTree
+from spectral.io import envi
 
 from emit_utils.daac_converter import add_variable, makeGlobalAttr
-from emit_utils.file_checks import netcdf_ext, envi_header
+from emit_utils.file_checks import envi_header
 
 
 obs_metadata = {"path_length": {"standard_name":  None,
