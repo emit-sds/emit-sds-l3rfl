@@ -163,7 +163,8 @@ def main():
     parser.add_argument('--ummg_file', type=str, help="Output UMMG filename")
     parser.add_argument('--log_file', type=str, default=None, help="Logging file to write to")
     parser.add_argument('--log_level', type=str, default="INFO", help="Logging level")
-    parser.add_argument('--chunksize', type=int, nargs=3, default=None, help="Chunk size for netCDF compression as (bands, lat, lon)")    args = parser.parse_args()
+    parser.add_argument('--chunksize', type=int, nargs=3, default=None, help="Chunk size for netCDF compression as (bands, lat, lon)")
+    args = parser.parse_args()
 
     if args.log_file is None:
         logging.basicConfig(format='%(message)s', level=args.log_level)
