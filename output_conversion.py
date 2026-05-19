@@ -4,6 +4,7 @@ import logging
 from osgeo import osr
 import numpy as np
 from netCDF4 import Dataset
+from PIL import Image
 from scipy.spatial import cKDTree
 from spectral.io import envi
 
@@ -151,6 +152,7 @@ def main():
     parser.add_argument('rfl_output_filename', type=str, help="Output Reflectance netcdf filename")
     parser.add_argument('rfl_unc_output_filename', type=str, help="Output Reflectance Uncertainty netcdf filename")
     parser.add_argument('obs_output_filename', type=str, help="Output Observables netcdf filename")
+    parser.add_argument('browse_filename', type=str, help="Output browse image filename")
     parser.add_argument('rfl_file', type=str, help="EMIT L2A reflectance ENVI file")
     parser.add_argument('rfl_unc_file', type=str, help="EMIT L2A reflectance uncertainty ENVI file")
     parser.add_argument('state_file', type=str, help="EMIT L2A reflectance state ENVI file")
@@ -232,8 +234,9 @@ details. Reflectance values are reported as fractions (relative to 1)."
 
 
     bands = nc_ds.createDimension("bands", rfl_ds.nbands)
+    wl = np.array([float(d) for d in rfl_ds.metadata['wavelength']])
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
-                 [float(d) for d in rfl_ds.metadata['wavelength']], {"dimensions": ("bands",)})
+                 wl, {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/fwhm", "f4", "Full Width at Half Max", "nm",
                  [float(d) for d in rfl_ds.metadata['fwhm']], {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
@@ -244,8 +247,19 @@ details. Reflectance values are reported as fractions (relative to 1)."
     rfl_mmap = rfl_ds.open_memmap(interleave='bip')[...].copy()
     rfl_mmap[mask,:] = -9999
     rfl_grid = np.zeros((rfl_ds.nbands,out_lines,out_columns), dtype = np.float32)
+
     for band in range(rfl_ds.nbands):
         rfl_grid[band] = grid.project_band(rfl_mmap[:,:,band],-9999)
+
+    browse_bands = [int(np.argmin(np.abs(wl-x))) for x in [660,550,440]]
+    browse = rfl_grid[browse_bands]
+    browse[browse == -9999] = np.nan
+
+    lo, hi = np.nanpercentile(browse, [2, 98])
+    browse = np.clip((browse - lo) / (hi - lo), 0, 1)
+    browse = (browse * 255).astype(np.uint8).transpose(1, 2, 0)
+
+    Image.fromarray(browse).save(args.browse_output_filename)
 
     kargs = {'zlib': args.compress,
              'complevel': args.complevel,
