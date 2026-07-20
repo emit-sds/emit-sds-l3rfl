@@ -152,7 +152,7 @@ def main():
     parser.add_argument('rfl_output_filename', type=str, help="Output Reflectance netcdf filename")
     parser.add_argument('rfl_unc_output_filename', type=str, help="Output Reflectance Uncertainty netcdf filename")
     parser.add_argument('obs_output_filename', type=str, help="Output Observables netcdf filename")
-    parser.add_argument('browse_filename', type=str, help="Output browse image filename")
+    parser.add_argument('browse_output_filename', type=str, help="Output browse image filename")
     parser.add_argument('rfl_file', type=str, help="EMIT L2A reflectance ENVI file")
     parser.add_argument('rfl_unc_file', type=str, help="EMIT L2A reflectance uncertainty ENVI file")
     parser.add_argument('state_file', type=str, help="EMIT L2A reflectance state ENVI file")
@@ -167,6 +167,8 @@ def main():
     parser.add_argument('--chunksize', type=int, nargs=3, default=None, help="Chunk size for netCDF compression as (bands, lat, lon)")
     parser.add_argument('--complevel', type=int, default=1, help="netCDF compression level (1-9)")
     parser.add_argument('--compress', action='store_true', default=False, help="Enable zlib compression")
+    parser.add_argument('--pixel_size', type=float, default=0.00055, help="Pixel size for the output grid")
+    parser.add_argument('--mask_band', type=int, default=9, help="Band index to apply for mask")
     args = parser.parse_args()
 
     if args.log_file is None:
@@ -209,7 +211,7 @@ def main():
 
     rfl_ds = envi.open(envi_header(args.rfl_file))
     mask_ds = envi.open(envi_header(args.mask_file))
-    mask = mask_ds.open_memmap(interleave='bip')[..., 9].copy() != 0
+    mask = mask_ds.open_memmap(interleave='bip')[..., args.mask_band].copy() != 0
 
     nc_ds = Dataset(args.rfl_output_filename, 'w', clobber=True, format='NETCDF4')
 
@@ -287,6 +289,10 @@ details. Reflectance values are reported as fractions (relative to 1)."
     aot550[mask] =  -9999
     aot550 = grid.project_band(aot550, -9999)
 
+    # Change chunksize for 2D case (state variables below are all 2D)
+    if args.chunksize is not None:
+        kargs['chunksizes'] = tuple(args.chunksize[-2:])
+
     add_variable(nc_ds,
                  "state_variables/aerosol_optical_thickness",
                  "f4", "Optical thickness of atmosphere layer due to ambient aerosol particles",
@@ -300,10 +306,6 @@ details. Reflectance values are reported as fractions (relative to 1)."
     wv = state_ds[..., 1].astype(np.float32)
     wv[mask] =  -9999
     wv = grid.project_band(wv, -9999)
-
-    # Change chunksize for 2D case
-    if args.chunksize is not None:
-        kargs['chunksizes'] = tuple(args.chunksize[-2:])
 
     add_variable(nc_ds,
                  "state_variables/water_vapor",
@@ -420,3 +422,5 @@ each pixel in an acquisition."
     logging.debug(f'Successfully created {args.obs_output_filename}')
 
 
+if __name__ == "__main__":
+    main()
