@@ -239,10 +239,15 @@ details. Reflectance values are reported as fractions (relative to 1)."
     wl = np.array([float(d) for d in rfl_ds.metadata['wavelength']])
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
                  wl, {"dimensions": ("bands",)})
+    nc_ds["sensor_band_parameters/wavelengths"].standard_name = "sensor_band_central_radiation_wavelength"
     add_variable(nc_ds, "sensor_band_parameters/fwhm", "f4", "Full Width at Half Max", "nm",
                  [float(d) for d in rfl_ds.metadata['fwhm']], {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
+    # It's redundant, but also add 'bands' at root, for xarray and QGIS
+    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
+                 {"dimensions": ("bands",)})
+    nc_ds["bands"].standard_name = "sensor_band_central_radiation_wavelength"
 
     logging.debug('Gridding and writing refectance data')
 
@@ -266,19 +271,13 @@ details. Reflectance values are reported as fractions (relative to 1)."
     kargs = {'zlib': args.compress,
              'complevel': args.complevel,
              'fill_value': -9999,
-             'significant_digits': 5}
+             'least_significant_digit': 5}
 
     if args.chunksize is not None:
         kargs['chunksizes'] = tuple(args.chunksize)
 
-    add_variable(nc_ds,
-                 "reflectance",
-                 "f4",
-                 "Surface hemispherical directional reflectance factor",
-                 "unitless",
-                 rfl_grid,
-                 {"dimensions": ("bands", 'lat','lon'), **kargs},)
-
+    add_variable(nc_ds, "reflectance", "f4", "Surface hemispherical directional reflectance factor",
+                 "unitless", rfl_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
     nc_ds["reflectance"].grid_mapping = "crs"
 
     logging.debug('Gridding and writing state data')
@@ -339,11 +338,16 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
 
     bands = nc_ds.createDimension("bands", rfl_unc_ds.nbands)
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
-                 [float(d) for d in rfl_ds.metadata['wavelength']], {"dimensions": ("bands",)})
+                 wl, {"dimensions": ("bands",)})
+    nc_ds["sensor_band_parameters/wavelengths"].standard_name = "sensor_band_central_radiation_wavelength"
     add_variable(nc_ds, "sensor_band_parameters/fwhm", "f4", "Full Width at Half Max", "nm",
                  [float(d) for d in rfl_ds.metadata['fwhm']], {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
+    # It's redundant, but also add 'bands' at root, for xarray and QGIS
+    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
+                 {"dimensions": ("bands",)})
+    nc_ds["bands"].standard_name = "sensor_band_central_radiation_wavelength"
 
     logging.debug('Gridding and writing refectance uncertainty data')
     rfl_unc_mmap = rfl_unc_ds.open_memmap(interleave='bip')[...].copy()
@@ -356,13 +360,9 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
     if args.chunksize is not None:
         kargs['chunksizes'] = tuple(args.chunksize)
 
-    add_variable(nc_ds,
-                 "reflectance_uncertainty",
-                 "f4",
-                 "Surface hemispherical directional reflectance factor uncertainty",
-                 "unitless",
-                 rfl_unc_grid,
-                 {"dimensions": ("bands", 'lat','lon'), **kargs},)
+    add_variable(nc_ds, "reflectance_uncertainty", "f4", "Surface hemispherical directional reflectance factor uncertainty",
+                 "unitless", rfl_unc_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
+    nc_ds["reflectance_uncertainty"].grid_mapping = "crs"
 
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
 
