@@ -152,7 +152,7 @@ def main():
     parser.add_argument('rfl_output_filename', type=str, help="Output Reflectance netcdf filename")
     parser.add_argument('rfl_unc_output_filename', type=str, help="Output Reflectance Uncertainty netcdf filename")
     parser.add_argument('obs_output_filename', type=str, help="Output Observables netcdf filename")
-    parser.add_argument('browse_filename', type=str, help="Output browse image filename")
+    parser.add_argument('browse_output_filename', type=str, help="Output browse image filename")
     parser.add_argument('rfl_file', type=str, help="EMIT L2A reflectance ENVI file")
     parser.add_argument('rfl_unc_file', type=str, help="EMIT L2A reflectance uncertainty ENVI file")
     parser.add_argument('state_file', type=str, help="EMIT L2A reflectance state ENVI file")
@@ -167,6 +167,8 @@ def main():
     parser.add_argument('--chunksize', type=int, nargs=3, default=None, help="Chunk size for netCDF compression as (bands, lat, lon)")
     parser.add_argument('--complevel', type=int, default=1, help="netCDF compression level (1-9)")
     parser.add_argument('--compress', action='store_true', default=False, help="Enable zlib compression")
+    parser.add_argument('--pixel_size', type=float, default=0.00055, help="Pixel size for the output grid")
+    parser.add_argument('--mask_band', type=int, default=9, help="Band index to apply for mask")
     args = parser.parse_args()
 
     if args.log_file is None:
@@ -209,7 +211,7 @@ def main():
 
     rfl_ds = envi.open(envi_header(args.rfl_file))
     mask_ds = envi.open(envi_header(args.mask_file))
-    mask = mask_ds.open_memmap(interleave='bip')[..., 9].copy() != 0
+    mask = mask_ds.open_memmap(interleave='bip')[..., args.mask_band].copy() != 0
 
     nc_ds = Dataset(args.rfl_output_filename, 'w', clobber=True, format='NETCDF4')
 
@@ -237,10 +239,15 @@ details. Reflectance values are reported as fractions (relative to 1)."
     wl = np.array([float(d) for d in rfl_ds.metadata['wavelength']])
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
                  wl, {"dimensions": ("bands",)})
+    nc_ds["sensor_band_parameters/wavelengths"].standard_name = "sensor_band_central_radiation_wavelength"
     add_variable(nc_ds, "sensor_band_parameters/fwhm", "f4", "Full Width at Half Max", "nm",
                  [float(d) for d in rfl_ds.metadata['fwhm']], {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
+    # It's redundant, but also add 'bands' at root, for xarray and QGIS
+    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
+                 {"dimensions": ("bands",)})
+    nc_ds["bands"].standard_name = "sensor_band_central_radiation_wavelength"
 
     logging.debug('Gridding and writing refectance data')
 
@@ -264,19 +271,13 @@ details. Reflectance values are reported as fractions (relative to 1)."
     kargs = {'zlib': args.compress,
              'complevel': args.complevel,
              'fill_value': -9999,
-             'significant_digits': 5}
+             'least_significant_digit': 5}
 
     if args.chunksize is not None:
         kargs['chunksizes'] = tuple(args.chunksize)
 
-    add_variable(nc_ds,
-                 "reflectance",
-                 "f4",
-                 "Surface hemispherical directional reflectance factor",
-                 "unitless",
-                 rfl_grid,
-                 {"dimensions": ("bands", 'lat','lon'), **kargs},)
-
+    add_variable(nc_ds, "reflectance", "f4", "Surface hemispherical directional reflectance factor",
+                 "unitless", rfl_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
     nc_ds["reflectance"].grid_mapping = "crs"
 
     logging.debug('Gridding and writing state data')
@@ -286,6 +287,10 @@ details. Reflectance values are reported as fractions (relative to 1)."
     aot550 = state_ds[..., 0].astype(np.float32)
     aot550[mask] =  -9999
     aot550 = grid.project_band(aot550, -9999)
+
+    # Change chunksize for 2D case (state variables below are all 2D)
+    if args.chunksize is not None:
+        kargs['chunksizes'] = tuple(args.chunksize[-2:])
 
     add_variable(nc_ds,
                  "state_variables/aerosol_optical_thickness",
@@ -300,10 +305,6 @@ details. Reflectance values are reported as fractions (relative to 1)."
     wv = state_ds[..., 1].astype(np.float32)
     wv[mask] =  -9999
     wv = grid.project_band(wv, -9999)
-
-    # Change chunksize for 2D case
-    if args.chunksize is not None:
-        kargs['chunksizes'] = tuple(args.chunksize[-2:])
 
     add_variable(nc_ds,
                  "state_variables/water_vapor",
@@ -337,11 +338,16 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
 
     bands = nc_ds.createDimension("bands", rfl_unc_ds.nbands)
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
-                 [float(d) for d in rfl_ds.metadata['wavelength']], {"dimensions": ("bands",)})
+                 wl, {"dimensions": ("bands",)})
+    nc_ds["sensor_band_parameters/wavelengths"].standard_name = "sensor_band_central_radiation_wavelength"
     add_variable(nc_ds, "sensor_band_parameters/fwhm", "f4", "Full Width at Half Max", "nm",
                  [float(d) for d in rfl_ds.metadata['fwhm']], {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
+    # It's redundant, but also add 'bands' at root, for xarray and QGIS
+    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
+                 {"dimensions": ("bands",)})
+    nc_ds["bands"].standard_name = "sensor_band_central_radiation_wavelength"
 
     logging.debug('Gridding and writing refectance uncertainty data')
     rfl_unc_mmap = rfl_unc_ds.open_memmap(interleave='bip')[...].copy()
@@ -354,13 +360,9 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
     if args.chunksize is not None:
         kargs['chunksizes'] = tuple(args.chunksize)
 
-    add_variable(nc_ds,
-                 "reflectance_uncertainty",
-                 "f4",
-                 "Surface hemispherical directional reflectance factor uncertainty",
-                 "unitless",
-                 rfl_unc_grid,
-                 {"dimensions": ("bands", 'lat','lon'), **kargs},)
+    add_variable(nc_ds, "reflectance_uncertainty", "f4", "Surface hemispherical directional reflectance factor uncertainty",
+                 "unitless", rfl_unc_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
+    nc_ds["reflectance_uncertainty"].grid_mapping = "crs"
 
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
 
@@ -420,3 +422,5 @@ each pixel in an acquisition."
     logging.debug(f'Successfully created {args.obs_output_filename}')
 
 
+if __name__ == "__main__":
+    main()
