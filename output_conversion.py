@@ -1,9 +1,12 @@
 import argparse
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 
-from osgeo import osr
 import numpy as np
+from matplotlib.path import Path
 from netCDF4 import Dataset
+from osgeo import osr
 from PIL import Image
 from scipy.spatial import cKDTree
 from spectral.io import envi
@@ -11,6 +14,7 @@ from spectral.io import envi
 from emit_utils.daac_converter import add_variable, makeGlobalAttr
 from emit_utils.file_checks import envi_header
 
+osr.UseExceptions()
 
 obs_metadata = {"path_length": {"standard_name":  None,
                                 "long_name": "Path length",
@@ -87,10 +91,18 @@ class Gridder():
     def create_tree(self, coords, input_shape, input_spacing=None):
         self.input_shape = input_shape
         self.input_spacing = input_spacing
+        self.coords = coords
         self.tree = cKDTree(coords, balanced_tree=False)
+        
+    def footprint(self):
+        grid = self.coords.reshape(*self.input_shape, 2)
+        boundary = np.concatenate([
+            grid[0, :], grid[:, -1], grid[-1, ::-1], grid[::-1, 0]
+        ])
+        return Path(boundary)
 
     def query_tree(self, ul_lon, ul_lat, lr_lon, lr_lat, pixel_size):
-        self.pixel_size = pixel_size
+        self.pixel_size = pixel_size       
         lines = int(np.ceil((ul_lat - lr_lat) / pixel_size))
         columns = int(np.ceil((lr_lon - ul_lon) / pixel_size))
         self.output_shape = (lines, columns)
@@ -100,13 +112,15 @@ class Gridder():
         lat = (ul_lat - row_idx * pixel_size).flatten()
         dest_points = np.column_stack([lon, lat])
 
-        distances, flat_idx = self.tree.query(dest_points, k=1)
+        distances, flat_idx = self.tree.query(dest_points, k=1, workers=-1)
         self.indices = np.unravel_index(flat_idx, self.input_shape)
         self.distances = distances.reshape(self.output_shape)
 
-        #TODO: May need to update logic to make sure no gaps inside image
-        threshold = (self.input_spacing or pixel_size) * np.sqrt(2) / 2
-        self.mask = ~(self.distances < threshold)
+        path = self.footprint()
+        inside = path.contains_points(dest_points).reshape(self.output_shape)
+
+        half_pixel = (self.input_spacing or pixel_size) * 0.5
+        self.mask = ~(inside | (self.distances <= half_pixel))
 
     def project_band(self, band, no_data):
         out = band[self.indices[0], self.indices[1]].reshape(self.output_shape)
@@ -161,14 +175,13 @@ def main():
     parser.add_argument('obs_file', type=str, help="EMIT L1B observables data ENVI file")
     parser.add_argument('version', type=str, help="3 digit (with leading V) version number")
     parser.add_argument('software_delivery_version', type=str, help="The extended build number at delivery time")
-    parser.add_argument('--ummg_file', type=str, help="Output UMMG filename")
     parser.add_argument('--log_file', type=str, default=None, help="Logging file to write to")
     parser.add_argument('--log_level', type=str, default="INFO", help="Logging level")
     parser.add_argument('--chunksize', type=int, nargs=3, default=None, help="Chunk size for netCDF compression as (bands, lat, lon)")
     parser.add_argument('--complevel', type=int, default=1, help="netCDF compression level (1-9)")
     parser.add_argument('--compress', action='store_true', default=False, help="Enable zlib compression")
     parser.add_argument('--pixel_size', type=float, default=0.00055, help="Pixel size for the output grid")
-    parser.add_argument('--mask_band', type=int, default=9, help="Band index to apply for mask")
+    parser.add_argument('--mask_band', type=int, default=5, help="Band index to apply for mask")
     args = parser.parse_args()
 
     if args.log_file is None:
@@ -196,9 +209,11 @@ def main():
 
     coords = np.column_stack([longitude.ravel(), latitude.ravel()])
 
+    t0 = time.time()
     grid = Gridder()
     grid.create_tree(coords, (in_lines, in_columns), input_spacing=input_spacing)
     grid.query_tree(lon_min, lat_max, lon_max, lat_min, ps)
+    logging.info(f"gridder: {time.time() - t0:.3f}s")
 
     geotransform = (lon_min - (ps/2), ps, 0, lat_max + (ps/2), 0, -ps)
 
@@ -234,7 +249,6 @@ details. Reflectance values are reported as fractions (relative to 1)."
     else:
         bbl = [bool(d) for d in rfl_ds.metadata['bbl']]
 
-
     bands = nc_ds.createDimension("bands", rfl_ds.nbands)
     wl = np.array([float(d) for d in rfl_ds.metadata['wavelength']])
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
@@ -251,13 +265,22 @@ details. Reflectance values are reported as fractions (relative to 1)."
 
     logging.debug('Gridding and writing refectance data')
 
-    rfl_mmap = rfl_ds.open_memmap(interleave='bip')[...].copy()
-    rfl_mmap[mask,:] = -9999
-    rfl_grid = np.zeros((rfl_ds.nbands,out_lines,out_columns), dtype = np.float32)
+    t0 = time.time()
+    rfl_cube = np.array(rfl_ds.open_memmap(interleave='bip'))
+    rfl_cube[mask,:] = -9999
+    logging.info(f"read cube: {time.time() - t0:.3f}s")
 
-    for band in range(rfl_ds.nbands):
-        rfl_grid[band] = grid.project_band(rfl_mmap[:,:,band],-9999)
+    rfl_grid = np.zeros((rfl_ds.nbands, out_lines, out_columns), dtype=np.float32)
 
+    def _proj(band):
+        rfl_grid[band] = grid.project_band(rfl_cube[:,:,band], -9999)
+
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=min(64, rfl_ds.nbands)) as ex:
+        list(ex.map(_proj, range(rfl_ds.nbands)))
+    logging.info(f"band gridding: {time.time() - t0:.3f}s")
+
+    t0 = time.time()
     browse_bands = [int(np.argmin(np.abs(wl-x))) for x in [660,550,440]]
     browse = rfl_grid[browse_bands]
     browse[browse == -9999] = np.nan
@@ -267,6 +290,7 @@ details. Reflectance values are reported as fractions (relative to 1)."
     browse = (browse * 255).astype(np.uint8).transpose(1, 2, 0)
 
     Image.fromarray(browse).save(args.browse_output_filename)
+    logging.info(f"browse: {time.time() - t0:.3f}s")
 
     kargs = {'zlib': args.compress,
              'complevel': args.complevel,
@@ -276,15 +300,23 @@ details. Reflectance values are reported as fractions (relative to 1)."
     if args.chunksize is not None:
         kargs['chunksizes'] = tuple(args.chunksize)
 
+    t0 = time.time()
     add_variable(nc_ds, "reflectance", "f4", "Surface hemispherical directional reflectance factor",
                  "unitless", rfl_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
+    logging.info(f"rfl write: {time.time() - t0:.3f}s")
+
     nc_ds["reflectance"].grid_mapping = "crs"
 
     logging.debug('Gridding and writing state data')
-    state_ds = envi.open(envi_header(args.state_file)).open_memmap(interleave='bip')
+    t0 = time.time()
+    state_obj = envi.open(envi_header(args.state_file))
+    state_ds = state_obj.open_memmap(interleave='bip')
 
-    #TODO: Check band names in case layer order is not constant
-    aot550 = state_ds[..., 0].astype(np.float32)
+    band_names = [b.strip() for b in state_obj.metadata['band names']]
+    aot_band = band_names.index('AOT550')
+    h2o_band = band_names.index('H2OSTR')
+
+    aot550 = state_ds[..., aot_band].astype(np.float32)
     aot550[mask] =  -9999
     aot550 = grid.project_band(aot550, -9999)
 
@@ -302,19 +334,21 @@ details. Reflectance values are reported as fractions (relative to 1)."
 
     nc_ds["state_variables/aerosol_optical_thickness"].grid_mapping = "crs"
 
-    wv = state_ds[..., 1].astype(np.float32)
+    wv = state_ds[..., h2o_band].astype(np.float32)
     wv[mask] =  -9999
     wv = grid.project_band(wv, -9999)
 
     add_variable(nc_ds,
                  "state_variables/water_vapor",
                  "f4",
-                 "LWE thickness of atmosphere mass content of water vapor",
-                 "cm",
+                 "Atmosphere mass content of water vapor",
+                 "g/cm2",
                  wv,
                  {"dimensions": ("lat", "lon"), **kargs},)
 
     nc_ds["state_variables/water_vapor"].grid_mapping = "crs"
+    logging.info(f"state write: {time.time() - t0:.3f}s")
+
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
     nc_ds.close()
     logging.debug(f'Successfully created {args.rfl_output_filename}')
@@ -350,18 +384,31 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
     nc_ds["bands"].standard_name = "sensor_band_central_radiation_wavelength"
 
     logging.debug('Gridding and writing refectance uncertainty data')
-    rfl_unc_mmap = rfl_unc_ds.open_memmap(interleave='bip')[...].copy()
-    rfl_unc_mmap[mask,:] = -9999
-    rfl_unc_grid = np.zeros((rfl_unc_ds.nbands,out_lines,out_columns), dtype = np.float32)
-    for band in range(rfl_unc_ds.nbands):
-        rfl_unc_grid[band] = grid.project_band(rfl_unc_mmap[:,:,band],-9999)
+
+    t0 = time.time()
+    rfl_unc_cube = np.array(rfl_unc_ds.open_memmap(interleave='bip'))
+    rfl_unc_cube[mask,:] = -9999
+    logging.info(f"read cube: {time.time() - t0:.3f}s")
+
+    rfl_unc_grid = np.zeros((rfl_unc_ds.nbands, out_lines, out_columns), dtype=np.float32)
+
+    def _proj(band):
+        rfl_unc_grid[band] = grid.project_band(rfl_unc_cube[:,:,band], -9999)
+
+    t0 = time.time()
+    with ThreadPoolExecutor(max_workers=min(64, rfl_unc_ds.nbands)) as ex:
+        list(ex.map(_proj, range(rfl_unc_ds.nbands)))
+    logging.info(f"band gridding: {time.time() - t0:.3f}s")
 
     #Chunksize back to 3d case
     if args.chunksize is not None:
         kargs['chunksizes'] = tuple(args.chunksize)
 
+    t0 = time.time()
     add_variable(nc_ds, "reflectance_uncertainty", "f4", "Surface hemispherical directional reflectance factor uncertainty",
                  "unitless", rfl_unc_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
+    logging.info(f"rfl unc write: {time.time() - t0:.3f}s")
+
     nc_ds["reflectance_uncertainty"].grid_mapping = "crs"
 
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
@@ -387,10 +434,7 @@ each pixel in an acquisition."
 
     obs_mmap = obs_ds.open_memmap(interleave='bip')[...].copy()
     obs_mmap[mask,:] = -9999
-
-    for band in range(rfl_unc_ds.nbands):
-        rfl_unc_grid[band] = grid.project_band(rfl_unc_mmap[:,:,band],-9999)
-
+    
     logging.debug('Gridding and writing observation data')
 
     # Change chunksize for 2D case
