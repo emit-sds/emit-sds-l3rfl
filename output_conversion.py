@@ -74,9 +74,6 @@ obs_metadata = {"path_length": {"standard_name":  None,
 
 class Gridder():
     """Nearest Neighbor Gridder class
-
-    TODO: Will fail across antimeridian, need to update
-
     """
     def __init__(self):
         self.tree = None
@@ -182,6 +179,8 @@ def main():
     parser.add_argument('--compress', action='store_true', default=False, help="Enable zlib compression")
     parser.add_argument('--pixel_size', type=float, default=0.00055, help="Pixel size for the output grid")
     parser.add_argument('--mask_band', type=int, default=5, help="Band index to apply for mask")
+    parser.add_argument('--max_workers', type=int, default=64, help="Maximum number of workers to used")
+
     args = parser.parse_args()
 
     if args.log_file is None:
@@ -276,7 +275,7 @@ details. Reflectance values are reported as fractions (relative to 1)."
         rfl_grid[band] = grid.project_band(rfl_cube[:,:,band], -9999)
 
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=min(64, rfl_ds.nbands)) as ex:
+    with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
         list(ex.map(_proj, range(rfl_ds.nbands)))
     logging.info(f"band gridding: {time.time() - t0:.3f}s")
 
@@ -396,7 +395,7 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
         rfl_unc_grid[band] = grid.project_band(rfl_unc_cube[:,:,band], -9999)
 
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=min(64, rfl_unc_ds.nbands)) as ex:
+    with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
         list(ex.map(_proj, range(rfl_unc_ds.nbands)))
     logging.info(f"band gridding: {time.time() - t0:.3f}s")
 
