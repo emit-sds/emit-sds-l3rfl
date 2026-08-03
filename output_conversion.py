@@ -124,6 +124,13 @@ class Gridder():
         out[self.mask] = no_data
         return out
 
+def set_statistics(var, mn=0.0, mx=1.0, mean=0.25, std=0.15, valid_pct=100.0):
+    var.setncattr("STATISTICS_MINIMUM", float(mn))
+    var.setncattr("STATISTICS_MAXIMUM", float(mx))
+    var.setncattr("STATISTICS_MEAN", float(mean))
+    var.setncattr("STATISTICS_STDDEV", float(std))
+    var.setncattr("STATISTICS_VALID_PERCENT", float(valid_pct))
+
 def create_CRS(nc_ds, out_lines, out_columns, pixel_size, geotransform):
 
     lon = nc_ds.createDimension("lon", out_columns)
@@ -132,14 +139,14 @@ def create_CRS(nc_ds, out_lines, out_columns, pixel_size, geotransform):
     x = nc_ds.createVariable("lon", "f8", ("lon",))
     x[:] = np.arange(out_columns) * pixel_size + geotransform[0] + pixel_size / 2
     x.standard_name = "longitude"
-    x.long_name = "longitude"
+    x.long_name = "Longitude (WGS-84)"
     x.units = "degrees_east"
     x.axis = "X"
 
     y = nc_ds.createVariable("lat", "f8", ("lat",))
     y[:] = geotransform[3] - np.arange(out_lines) * pixel_size - pixel_size / 2
     y.standard_name = "latitude"
-    y.long_name = "latitude"
+    y.long_name = "Latitude (WGS-84)"
     y.units = "degrees_north"
     y.axis = "Y"
 
@@ -251,16 +258,14 @@ details. Reflectance values are reported as fractions (relative to 1)."
     bands = nc_ds.createDimension("bands", rfl_ds.nbands)
     wl = np.array([float(d) for d in rfl_ds.metadata['wavelength']])
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
-                 wl, {"dimensions": ("bands",)})
-    nc_ds["sensor_band_parameters/wavelengths"].standard_name = "sensor_band_central_radiation_wavelength"
+                 wl, {"dimensions": ("bands",)}, standard_name = "radiation_wavelength")
     add_variable(nc_ds, "sensor_band_parameters/fwhm", "f4", "Full Width at Half Max", "nm",
                  [float(d) for d in rfl_ds.metadata['fwhm']], {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
     # It's redundant, but also add 'bands' at root, for xarray and QGIS
     add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
-                 {"dimensions": ("bands",)})
-    nc_ds["bands"].standard_name = "sensor_band_central_radiation_wavelength"
+                 {"dimensions": ("bands",)}, standard_name = "radiation_wavelength")
 
     logging.debug('Gridding and writing refectance data')
 
@@ -300,12 +305,15 @@ details. Reflectance values are reported as fractions (relative to 1)."
         kargs['chunksizes'] = tuple(args.chunksize)
 
     t0 = time.time()
-    add_variable(nc_ds, "reflectance", "f4", "Surface hemispherical directional reflectance factor",
-                 "unitless", rfl_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
+    add_variable(nc_ds, "reflectance", "f4", "Hemispherical-Directional Reflectance Factor",
+                 "unitless", rfl_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},
+                 standard_name = "surface_bidirectional_reflectance")
     logging.info(f"rfl write: {time.time() - t0:.3f}s")
 
     nc_ds["reflectance"].grid_mapping = "crs"
-
+    
+    set_statistics(nc_ds["reflectance"])
+    
     logging.debug('Gridding and writing state data')
     t0 = time.time()
     state_obj = envi.open(envi_header(args.state_file))
@@ -325,10 +333,11 @@ details. Reflectance values are reported as fractions (relative to 1)."
 
     add_variable(nc_ds,
                  "state_variables/aerosol_optical_thickness",
-                 "f4", "Optical thickness of atmosphere layer due to ambient aerosol particles",
+                 "f4", "Optical thickness of atmosphere layer due to ambient aerosol particles at 550 nm",
                  'unitless',
                  aot550,
                  {"dimensions": ("lat", "lon"), **kargs},
+                 standard_name = "atmosphere_absorption_optical_thickness_due_to_ambient_aerosol_particles"
                  )
 
     nc_ds["state_variables/aerosol_optical_thickness"].grid_mapping = "crs"
@@ -340,10 +349,11 @@ details. Reflectance values are reported as fractions (relative to 1)."
     add_variable(nc_ds,
                  "state_variables/water_vapor",
                  "f4",
-                 "Atmosphere mass content of water vapor",
-                 "g/cm2",
+                 "Atmospheric mass content of water vapor",
+                 "g/cm^2",
                  wv,
-                 {"dimensions": ("lat", "lon"), **kargs},)
+                 {"dimensions": ("lat", "lon"), **kargs},
+                 standard_name = "atmosphere_mass_content_of_water_vapor")
 
     nc_ds["state_variables/water_vapor"].grid_mapping = "crs"
     logging.info(f"state write: {time.time() - t0:.3f}s")
@@ -371,16 +381,14 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
 
     bands = nc_ds.createDimension("bands", rfl_unc_ds.nbands)
     add_variable(nc_ds, "sensor_band_parameters/wavelengths", "f4", "Wavelength Centers", "nm",
-                 wl, {"dimensions": ("bands",)})
-    nc_ds["sensor_band_parameters/wavelengths"].standard_name = "sensor_band_central_radiation_wavelength"
+                 wl, {"dimensions": ("bands",)}, standard_name = "radiation_wavelength")
     add_variable(nc_ds, "sensor_band_parameters/fwhm", "f4", "Full Width at Half Max", "nm",
                  [float(d) for d in rfl_ds.metadata['fwhm']], {"dimensions": ("bands",)})
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
     # It's redundant, but also add 'bands' at root, for xarray and QGIS
     add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
-                 {"dimensions": ("bands",)})
-    nc_ds["bands"].standard_name = "sensor_band_central_radiation_wavelength"
+                 {"dimensions": ("bands",)}, standard_name = "radiation_wavelength")
 
     logging.debug('Gridding and writing refectance uncertainty data')
 
@@ -404,11 +412,12 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
         kargs['chunksizes'] = tuple(args.chunksize)
 
     t0 = time.time()
-    add_variable(nc_ds, "reflectance_uncertainty", "f4", "Surface hemispherical directional reflectance factor uncertainty",
+    add_variable(nc_ds, "reflectance_uncertainty", "f4", "Hemispherical-Directional Reflectance Factor Uncertainty",
                  "unitless", rfl_unc_grid, {"dimensions": ("bands", 'lat','lon'), **kargs},)
     logging.info(f"rfl unc write: {time.time() - t0:.3f}s")
 
     nc_ds["reflectance_uncertainty"].grid_mapping = "crs"
+    set_statistics(nc_ds["reflectance_uncertainty"])
 
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
 
