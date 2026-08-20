@@ -9,6 +9,7 @@ from netCDF4 import Dataset
 from osgeo import osr
 from PIL import Image
 from scipy.spatial import cKDTree
+from scipy import ndimage
 from spectral.io import envi
 
 from emit_utils.daac_converter import add_variable, makeGlobalAttr
@@ -90,7 +91,7 @@ class Gridder():
         self.input_spacing = input_spacing
         self.coords = coords
         self.tree = cKDTree(coords, balanced_tree=False)
-        
+
     def footprint(self):
         grid = self.coords.reshape(*self.input_shape, 2)
         boundary = np.concatenate([
@@ -99,7 +100,7 @@ class Gridder():
         return Path(boundary)
 
     def query_tree(self, ul_lon, ul_lat, lr_lon, lr_lat, pixel_size):
-        self.pixel_size = pixel_size       
+        self.pixel_size = pixel_size
         lines = int(np.ceil((ul_lat - lr_lat) / pixel_size))
         columns = int(np.ceil((lr_lon - ul_lon) / pixel_size))
         self.output_shape = (lines, columns)
@@ -186,6 +187,7 @@ def main():
     parser.add_argument('--compress', action='store_true', default=False, help="Enable zlib compression")
     parser.add_argument('--pixel_size', type=float, default=0.00055, help="Pixel size for the output grid")
     parser.add_argument('--mask_band', type=int, default=5, help="Band index to apply for mask")
+    parser.add_argument('--prob_band', type=int, default=4, help="Band index for specTf cloud probability")
     parser.add_argument('--max_workers', type=int, default=64, help="Maximum number of workers to used")
 
     args = parser.parse_args()
@@ -227,12 +229,11 @@ def main():
 
     # Create reflectance netCDF
     ###########################
-
     logging.info(f'Creating netCDF4 file: {args.rfl_output_filename}')
 
     rfl_ds = envi.open(envi_header(args.rfl_file))
     mask_ds = envi.open(envi_header(args.mask_file))
-    mask = mask_ds.open_memmap(interleave='bip')[..., args.mask_band].copy() != 0
+    mask = mask_ds.open_memmap(interleave='bip')[..., args.mask_band].copy()
 
     nc_ds = Dataset(args.rfl_output_filename, 'w', clobber=True, format='NETCDF4')
 
@@ -264,24 +265,34 @@ details. Reflectance values are reported as fractions (relative to 1)."
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
     # It's redundant, but also add 'bands' at root, for xarray and QGIS
-    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
+    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']],
                  {"dimensions": ("bands",)}, standard_name = "radiation_wavelength")
 
     logging.debug('Gridding and writing refectance data')
 
     t0 = time.time()
     rfl_cube = np.array(rfl_ds.open_memmap(interleave='bip'))
-    rfl_cube[mask,:] = -9999
     logging.info(f"read cube: {time.time() - t0:.3f}s")
 
-    rfl_grid = np.zeros((rfl_ds.nbands, out_lines, out_columns), dtype=np.float32)
+    mask_grid = grid.project_band(mask, -9999)
 
+    lbl, n = ndimage.label(mask_grid)
+    eroded = ndimage.binary_erosion(mask_grid, np.ones((3, 3), bool))
+    keep = np.zeros(n + 1, bool)
+    keep[np.unique(lbl[eroded])] = True
+    keep[0] = False
+
+    mask_grid = keep[lbl]
+
+    rfl_grid = np.zeros((rfl_ds.nbands, out_lines, out_columns), dtype=np.float32)
     def _proj(band):
         rfl_grid[band] = grid.project_band(rfl_cube[:,:,band], -9999)
 
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
         list(ex.map(_proj, range(rfl_ds.nbands)))
+
+    rfl_grid[:,mask_grid == 1] = -9999
     logging.info(f"band gridding: {time.time() - t0:.3f}s")
 
     t0 = time.time()
@@ -311,9 +322,9 @@ details. Reflectance values are reported as fractions (relative to 1)."
     logging.info(f"rfl write: {time.time() - t0:.3f}s")
 
     nc_ds["reflectance"].grid_mapping = "crs"
-    
+
     set_statistics(nc_ds["reflectance"])
-    
+
     logging.debug('Gridding and writing state data')
     t0 = time.time()
     state_obj = envi.open(envi_header(args.state_file))
@@ -324,8 +335,8 @@ details. Reflectance values are reported as fractions (relative to 1)."
     h2o_band = band_names.index('H2OSTR')
 
     aot550 = state_ds[..., aot_band].astype(np.float32)
-    aot550[mask] =  -9999
     aot550 = grid.project_band(aot550, -9999)
+    aot550[mask_grid == 1] = -9999
 
     # Change chunksize for 2D case (state variables below are all 2D)
     if args.chunksize is not None:
@@ -343,8 +354,8 @@ details. Reflectance values are reported as fractions (relative to 1)."
     nc_ds["state_variables/aerosol_optical_thickness"].grid_mapping = "crs"
 
     wv = state_ds[..., h2o_band].astype(np.float32)
-    wv[mask] =  -9999
     wv = grid.project_band(wv, -9999)
+    wv[mask_grid == 1] = -9999
 
     add_variable(nc_ds,
                  "state_variables/water_vapor",
@@ -356,6 +367,20 @@ details. Reflectance values are reported as fractions (relative to 1)."
                  standard_name = "atmosphere_mass_content_of_water_vapor")
 
     nc_ds["state_variables/water_vapor"].grid_mapping = "crs"
+    logging.info(f"state write: {time.time() - t0:.3f}s")
+
+    cloud_prob = mask_ds.open_memmap(interleave='bip')[..., args.prob_band].copy()
+    wv = grid.project_band(cloud_prob, -9999)
+
+    add_variable(nc_ds,
+                 "masks/cloud_probability",
+                 "f4",
+                 "SpecTf-Cloud Probability",
+                 "unitless",
+                 wv,
+                 {"dimensions": ("lat", "lon"), **kargs})
+
+    nc_ds["masks/cloud_probability"].grid_mapping = "crs"
     logging.info(f"state write: {time.time() - t0:.3f}s")
 
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
@@ -387,20 +412,22 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
     add_variable(nc_ds, "sensor_band_parameters/good_wavelengths", "u1", "Wavelengths where reflectance is useable: 1 = good data, 0 = bad data", "unitless",
                  bbl, {"dimensions": ("bands",)})
     # It's redundant, but also add 'bands' at root, for xarray and QGIS
-    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']], 
+    add_variable(nc_ds, "bands", "f4", "Wavelength Centers", "nm", [float(d) for d in rfl_ds.metadata['wavelength']],
                  {"dimensions": ("bands",)}, standard_name = "radiation_wavelength")
 
     logging.debug('Gridding and writing refectance uncertainty data')
 
     t0 = time.time()
     rfl_unc_cube = np.array(rfl_unc_ds.open_memmap(interleave='bip'))
-    rfl_unc_cube[mask,:] = -9999
+
     logging.info(f"read cube: {time.time() - t0:.3f}s")
 
     rfl_unc_grid = np.zeros((rfl_unc_ds.nbands, out_lines, out_columns), dtype=np.float32)
 
     def _proj(band):
         rfl_unc_grid[band] = grid.project_band(rfl_unc_cube[:,:,band], -9999)
+
+    rfl_unc_grid[:,mask_grid == 1] = -9999
 
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
@@ -441,8 +468,7 @@ each pixel in an acquisition."
     create_CRS(nc_ds, out_lines, out_columns, args.pixel_size, geotransform)
 
     obs_mmap = obs_ds.open_memmap(interleave='bip')[...].copy()
-    obs_mmap[mask,:] = -9999
-    
+
     logging.debug('Gridding and writing observation data')
 
     # Change chunksize for 2D case
@@ -452,6 +478,7 @@ each pixel in an acquisition."
     for band in obs_metadata.keys():
 
         band_gridded = grid.project_band(obs_mmap[:,:,obs_metadata[band]['band']],-9999)
+        band_gridded[mask_grid == 1] = -9999
         variable_name = f"observation_parameters/{band}"
 
         add_variable(nc_ds,
