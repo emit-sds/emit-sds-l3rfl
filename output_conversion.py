@@ -370,18 +370,17 @@ details. Reflectance values are reported as fractions (relative to 1)."
     logging.info(f"state write: {time.time() - t0:.3f}s")
 
     cloud_prob = mask_ds.open_memmap(interleave='bip')[..., args.prob_band].copy()
-    wv = grid.project_band(cloud_prob, -9999)
+    cloud_prob = grid.project_band(cloud_prob, -9999)
 
     add_variable(nc_ds,
                  "masks/cloud_probability",
                  "f4",
                  "SpecTf-Cloud Probability",
                  "unitless",
-                 wv,
+                 cloud_prob,
                  {"dimensions": ("lat", "lon"), **kargs})
 
     nc_ds["masks/cloud_probability"].grid_mapping = "crs"
-    logging.info(f"state write: {time.time() - t0:.3f}s")
 
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
     nc_ds.close()
@@ -427,11 +426,12 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
     def _proj(band):
         rfl_unc_grid[band] = grid.project_band(rfl_unc_cube[:,:,band], -9999)
 
-    rfl_unc_grid[:,mask_grid == 1] = -9999
-
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=args.max_workers) as ex:
         list(ex.map(_proj, range(rfl_unc_ds.nbands)))
+
+    rfl_unc_grid[:,mask_grid == 1] = -9999
+
     logging.info(f"band gridding: {time.time() - t0:.3f}s")
 
     #Chunksize back to 3d case
