@@ -290,6 +290,35 @@ def write_combined_sidecar(paths, sidecar_path):
         json.dump(combined, f, indent=2)
     logging.info(f"combined sidecar: {os.path.basename(sidecar_path)}")
 
+def write_combined_sidecar(paths, sidecar_path, url_basename="lp-prod-protected/EMITL2ARFL.002"):
+    """"
+    Write an integrated kerchunk sidecar json file on the common grid,
+    with template URL resolution.
+
+    paths[0] must be the base (e.g. reflectance)
+    """
+    
+    # Prefix URLs with {{u}}/ to allow templates injection
+    per_file = [SingleHdf5ToZarr(p, url=f"{{{{u}}}}/{os.path.basename(p)}", inline_threshold=0).translate()
+                for p in paths]
+    
+    combined = MultiZarrToZarr(per_file, concat_dims=[],
+                               identical_dims=["lat", "lon", "bands"]).translate()
+    
+    url_basename = url_basename.strip('/')
+    
+    fid = os.path.splitext(os.path.basename(paths[0]))[0]
+
+    # Inject templates to the root of the sidecar payload
+    combined["templates"] = {
+        "u": f"s3://{url_basename}/{fid}",
+        "u_https_hint": f"https://data.lpdaac.earthdatacloud.nasa.gov/{url_basename}/{fid}"
+    }
+
+    with open(sidecar_path, "w") as f:
+        json.dump(combined, f, indent=2)
+    logging.info(f"combined sidecar: {os.path.basename(sidecar_path)}")
+
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, description='''This script \
