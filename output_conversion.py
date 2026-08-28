@@ -1,8 +1,11 @@
 import argparse
+import json
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
+import h5py
 import numpy as np
 from matplotlib.path import Path
 from netCDF4 import Dataset
@@ -11,6 +14,8 @@ from PIL import Image
 from scipy.spatial import cKDTree
 from scipy import ndimage
 from spectral.io import envi
+from kerchunk.hdf import SingleHdf5ToZarr
+from kerchunk.combine import MultiZarrToZarr
 
 from emit_utils.daac_converter import add_variable, makeGlobalAttr
 from emit_utils.file_checks import envi_header
@@ -164,6 +169,128 @@ def create_CRS(nc_ds, out_lines, out_columns, pixel_size, geotransform):
     crs.crs_wkt = srs.ExportToWkt()
     crs.GeoTransform = " ".join(str(x) for x in geotransform)
 
+
+
+def copy_attributes(src_obj, dst_obj):
+    for k, v in src_obj.attrs.items():
+        if k in ["CLASS", "NAME", "REFERENCE_LIST", "DIMENSION_LIST"]:
+            continue
+        dst_obj.attrs[k] = v
+
+
+def filter_kwargs(src_ds):
+    kwargs = {}
+    if src_ds.compression is not None:
+        kwargs["compression"] = src_ds.compression
+        if src_ds.compression_opts is not None:
+            kwargs["compression_opts"] = src_ds.compression_opts
+    if src_ds.shuffle:
+        kwargs["shuffle"] = True
+    if src_ds.fletcher32:
+        kwargs["fletcher32"] = True
+    if src_ds.scaleoffset is not None:
+        kwargs["scaleoffset"] = src_ds.scaleoffset
+    return kwargs
+
+
+def finalize_layout(path):
+    """Rewrite a NetCDF-4/HDF5 file so all group/variable metadata lands near byte 0.
+
+    netCDF writes headers at current file position when each objects is created
+
+    this function uses hdf5 to rewrite by passing through the file twice.  First pass
+    creates everything without data, second pass copies data right back in, adjusting
+    the order. Bit of a hack, as it relies on hitting the disk multiple times,
+    but works with the libraries in hand.
+    
+    Important - keep libver at v108 (HDF5 1.8), for superblock verison 2.  Version 3
+    is better for reads, but is incompatible with QGIS.  A sidecar will bridge the
+    gap for cloud streaming.
+    """
+    tmp_path = path + ".finalize.tmp"
+
+    with h5py.File(path, "r") as fs, h5py.File(tmp_path, "w", libver="v108") as fd:
+        copy_attributes(fs, fd)  # global/root attrs
+
+        groups, datasets = [], []
+
+        def visit(name, obj):
+            if isinstance(obj, h5py.Group):
+                groups.append(name)
+            elif isinstance(obj, h5py.Dataset):
+                datasets.append(name)
+
+        fs.visititems(visit)
+
+        for g in groups:
+            copy_attributes(fs[g], fd.create_group(g))
+
+        # pass 1, structure and attributes
+        layouts = {}
+        for name in datasets:
+            src_ds = fs[name]
+            layout = src_ds.id.get_create_plist().get_layout()  # 1=contiguous, 2=chunked
+            layouts[name] = layout
+            if layout == 2:
+                dst_ds = fd.create_dataset(name, shape=src_ds.shape, dtype=src_ds.dtype,
+                                           chunks=src_ds.chunks, fillvalue=src_ds.fillvalue,
+                                           **filter_kwargs(src_ds))
+            else:
+                dst_ds = fd.create_dataset(name, shape=src_ds.shape, dtype=src_ds.dtype,
+                                           fillvalue=src_ds.fillvalue)
+            copy_attributes(src_ds, dst_ds)
+
+        # Recreate dimension-scale relationships (reference-typed, can't be copied as attrs).
+        for name in datasets:
+            if h5py.h5ds.is_scale(fs[name].id):
+                h5py.h5ds.set_scale(fd[name].id, name.encode())
+        for name in datasets:
+            src_ds = fs[name]
+            for i in range(len(src_ds.dims)):
+                for j in range(len(src_ds.dims[i])):
+                    scale_name = src_ds.dims[i][j].name.lstrip("/")
+                    h5py.h5ds.attach_scale(fd[name].id, fd[scale_name].id, i)
+
+        # pass 2 (small first)
+        def order_key(name):
+            src_ds = fs[name]
+            return int(np.prod(src_ds.shape)) * src_ds.dtype.itemsize
+
+        contiguous = [n for n in datasets if layouts[n] != 2]
+        chunked = sorted((n for n in datasets if layouts[n] == 2), key=order_key)
+        write_order = contiguous + chunked
+
+        with open(path, "rb") as raw:
+            for name in write_order:
+                src_ds, dst_ds = fs[name], fd[name]
+                if layouts[name] == 2:
+                    for i in range(src_ds.id.get_num_chunks()):
+                        ci = src_ds.id.get_chunk_info(i)
+                        raw.seek(ci.byte_offset)
+                        dst_ds.id.write_direct_chunk(ci.chunk_offset, raw.read(ci.size),
+                                                     filter_mask=ci.filter_mask)
+                else:
+                    dst_ds[...] = src_ds[...]
+
+    # temp file becomes actual
+    os.replace(tmp_path, path)
+    logging.info(f"finalized layout: {os.path.basename(path)}")
+
+
+def write_combined_sidecar(paths, sidecar_path):
+    """"
+    Write an integrated kerchunk sidecar json file on the common grid
+    """
+
+    per_file = [SingleHdf5ToZarr(p, url=os.path.basename(p), inline_threshold=0).translate()
+                for p in paths]
+    combined = MultiZarrToZarr(per_file, concat_dims=[],
+                               identical_dims=["lat", "lon", "bands"]).translate()
+    with open(sidecar_path, "w") as f:
+        json.dump(combined, f, indent=2)
+    logging.info(f"combined sidecar: {os.path.basename(sidecar_path)}")
+
+
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, description='''This script \
     converts L1B G and L2A PGE outputs to L3 DAAC compatible formats, with supporting metadata''', add_help=True)
@@ -189,6 +316,8 @@ def main():
     parser.add_argument('--mask_band', type=int, default=5, help="Band index to apply for mask")
     parser.add_argument('--prob_band', type=int, default=4, help="Band index for specTf cloud probability")
     parser.add_argument('--max_workers', type=int, default=64, help="Maximum number of workers to used")
+    parser.add_argument('--sidecar', action='store_true', default=False,
+                        help="Write a single, combined kerchunk reference JSON that covers all three netCDFs")
 
     args = parser.parse_args()
 
@@ -386,6 +515,7 @@ details. Reflectance values are reported as fractions (relative to 1)."
     nc_ds.close()
     logging.debug(f'Successfully created {args.rfl_output_filename}')
 
+    finalize_layout(args.rfl_output_filename)
     # Create uncertainty netCDF
     ###########################
 
@@ -451,6 +581,7 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
     nc_ds.close()
     logging.debug(f'Successfully created {args.rfl_unc_output_filename}')
 
+    finalize_layout(args.rfl_unc_output_filename)
     # Create observations netCDF
     ###########################
     logging.info(f'Creating netCDF4 file: {args.obs_output_filename}')
@@ -498,7 +629,13 @@ each pixel in an acquisition."
     nc_ds.ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"
     nc_ds.close()
 
+    finalize_layout(args.obs_output_filename)
     logging.debug(f'Successfully created {args.obs_output_filename}')
+
+    if args.sidecar:
+        write_combined_sidecar(
+            [args.rfl_output_filename, args.rfl_unc_output_filename, args.obs_output_filename],
+            os.path.splitext(args.rfl_output_filename)[0] + ".json")
 
 
 if __name__ == "__main__":
