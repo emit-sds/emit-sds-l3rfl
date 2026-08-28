@@ -2,6 +2,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -364,6 +365,20 @@ def main():
     else:
         logging.basicConfig(format='%(asctime)s %(levelname)s: %(message)s', level=args.log_level, filename=args.log_file)
 
+    # Capture input files for metadata
+    input_files = {
+        "reflectance_file": args.rfl_file,
+        "reflectance_uncertainty_file": args.rfl_unc_file,
+        "mask_file": args.mask_file,
+        "pixel_locations_file": args.loc_file,
+        "observation_parameters_file": args.obs_file
+    }
+    input_files_str = ", ".join(f"{k}={v}" for k, v in input_files.items())
+
+    # Create run command string for "history" field in metadata
+    run_command = "python " + " ".join(sys.argv)
+    l3_history_str = "L3 Reformatting PGE Run Command: {" + run_command + "}, L3 Reformatting PGE Input Files: {" + input_files_str + "}"
+
     logging.info(f'Creating gridder')
     loc_ds = envi.open(envi_header(args.loc_file))
     obs_ds = envi.open(envi_header(args.obs_file))
@@ -411,6 +426,7 @@ def main():
         f"\\n\\nThis file contains L3 estimated surface reflectances \
 and geolocation data. Reflectance estimates are created using an Optimal Estimation technique - see ATBD for \
 details. Reflectance values are reported as fractions (relative to 1)."
+    nc_ds.history = nc_ds.history + ", " + l3_history_str
 
     create_CRS(nc_ds, out_lines, out_columns, args.pixel_size, geotransform)
 
@@ -568,6 +584,7 @@ details. Reflectance values are reported as fractions (relative to 1)."
         f"\\n\\nThis file contains L3 estimated surface reflectances \
 and geolocation data. Reflectance uncertainty estimates are created using an Optimal Estimation technique - see ATBD for \
 details. Reflectance uncertainty values are reported as fractions (relative to 1)."
+    nc_ds.history = nc_ds.history + ", " + l3_history_str
 
     create_CRS(nc_ds, out_lines, out_columns, args.pixel_size, geotransform)
 
@@ -633,6 +650,7 @@ details. Reflectance uncertainty values are reported as fractions (relative to 1
     nc_ds.summary = nc_ds.summary + \
         f"\\n\\nThis file contains L3 geometric information (path length, view and solar angles, timing) associated with \
 each pixel in an acquisition."
+    nc_ds.history = nc_ds.history + ", " + l3_history_str
 
     create_CRS(nc_ds, out_lines, out_columns, args.pixel_size, geotransform)
 
