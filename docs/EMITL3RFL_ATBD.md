@@ -7,8 +7,8 @@ ATBD-EMIT-L3RFL
 
 ### Algorithm Theoretical Basis Document
 
-**Version:** 0.1
-**Release Date:** TBD
+**Version:** X.X
+**Release Date:** YYYY-MM-DD
 
 Jet Propulsion Laboratory
 California Institute of Technology
@@ -18,7 +18,7 @@ Pasadena, California 91109
 
 | Version | Date       | Comments      |
 | ------- | ---------- | ------------- |
-| 0.1     | 2026-08-14 | Initial Draft |
+| X.X     | YYYY-MM-DD |  |
 
 
 ## Table of Contents
@@ -56,11 +56,7 @@ EMIT data products are organized into levels. Level 1B provides calibrated radia
 
 EMIT L1B and L2A products are delivered in the instrument frame with an accompanying geolocation lookup table (GLT). This preserves the native sampling of the instrument: every spectrum in the delivered cube is a measured spectrum, with no resampling applied. Users working spatially, or combining EMIT with other gridded datasets, apply the GLT following EMIT conventions before beginning their analysis.
 
-The L3 stage provides the gridded form directly. The product opens in standard geospatial software with georeferencing already applied.
-
-Datasets are resampled by nearest-neighbor assignment. Each output cell takes the value of the single closest input pixel, so every output spectrum is an unmodified measured spectrum.
-
-The output grid is defined in geographic coordinates (EPSG:4326) at a fixed angular pixel size of 0.00055 degrees, and is snapped to multiples of that pixel size. A global geographic grid gives every granule a consistent and directly comparable definition.
+The L3 stage provides the gridded form directly. The product opens in standard geospatial software with georeferencing already applied. Datasets are resampled by nearest-neighbor assignment. Each output cell takes the value of the single closest input pixel, every output spectrum is an unmodified measured spectrum. The output grid is defined in geographic coordinates (EPSG:4326) at a fixed angular pixel size of 0.00055 degrees, and is snapped to multiples of that pixel size.
 
 ## **4. Algorithm Implementation**
 
@@ -137,9 +133,7 @@ An output cell is retained if it is inside the footprint polygon or if its neare
 
 #### 4.2.4 Cloud Masking
 
-The `SpecTf-Cloud Flag` band of the L2A mask is gridded through the same nearest-neighbor assignment as the science data, using the shared index array of Section 4.2.2, and the resulting gridded mask is then filtered and applied to the output products. Gridding the mask rather than applying it in the instrument frame means the flag and the spectrum it describes are transported together, and the filtering step of Section 4.2.4.1 operates on the same spatial sampling in which the product is delivered.
-
-The screening band is selected by a zero-based index into the mask file (default 5, i.e. the sixth band), and any non-zero value is treated as flagged. Because mask band ordering differs between mask product versions, the index appropriate to the mask version being processed must be supplied; the band list for a given version is given in the EMIT L2A Mask User Guide.
+The `SpecTf-Cloud Flag` band of the L2A mask is gridded through the same nearest-neighbor assignment as the science data, using the shared index array of Section 4.2.2, and the resulting gridded mask is then filtered and applied to the output products.
 
 Cells outside the acquisition footprint carry the fill value -9999 in the gridded mask, which is non-zero and therefore flagged. These cells are already fill in every output product, so the outcome is unchanged, but it means the flagged set includes the exterior of the swath as well as the screened pixels within it.
 
@@ -147,7 +141,7 @@ Cells outside the acquisition footprint carry the fill value -9999 in the gridde
 
 The gridded cloud screening mask is not applied directly. It is first filtered to drop small flagged regions, which are potential false positives.
 
-First, the mask is labeled into connected components under 4-connectivity, so that two flagged cells belong to the same component only if they share an edge. Unflagged background is excluded from the test that follows. Second, the mask is eroded with a three-by-three structuring element of all ones, so that a cell survives erosion only if it and all eight of its neighbors are flagged. A component is retained in full if any one of its cells survives erosion, and is discarded otherwise.
+Next, the mask is labeled into connected components under 4-connectivity, so that two flagged cells belong to the same component only if they share an edge. Unflagged background is excluded from the test that follows. Second, the mask is eroded with a three-by-three structuring element of all ones, so that a cell survives erosion only if it and all eight of its neighbors are flagged. A component is retained in full if any one of its cells survives erosion, and is discarded otherwise.
 
 ##### 4.2.4.2 Application to the Output Products
 
