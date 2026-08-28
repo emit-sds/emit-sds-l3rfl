@@ -277,39 +277,49 @@ def finalize_layout(path):
     logging.info(f"finalized layout: {os.path.basename(path)}")
 
 
-def write_combined_sidecar(paths, sidecar_path):
-    """"
-    Write an integrated kerchunk sidecar json file on the common grid
-    """
-
-    per_file = [SingleHdf5ToZarr(p, url=os.path.basename(p), inline_threshold=0).translate()
-                for p in paths]
-    combined = MultiZarrToZarr(per_file, concat_dims=[],
-                               identical_dims=["lat", "lon", "bands"]).translate()
-    with open(sidecar_path, "w") as f:
-        json.dump(combined, f, indent=2)
-    logging.info(f"combined sidecar: {os.path.basename(sidecar_path)}")
-
 def write_combined_sidecar(paths, sidecar_path, url_basename="lp-prod-protected/EMITL2ARFL.002"):
-    """"
+    """
     Write an integrated kerchunk sidecar json file on the common grid,
     with template URL resolution.
 
     paths[0] must be the base (e.g. reflectance)
     """
     
-    # Prefix URLs with {{u}}/ to allow templates injection
-    per_file = [SingleHdf5ToZarr(p, url=f"{{{{u}}}}/{os.path.basename(p)}", inline_threshold=0).translate()
+    # Generate dictionaries - may have lingering basenames
+    per_file = [SingleHdf5ToZarr(p, inline_threshold=0).translate()
                 for p in paths]
     
     combined = MultiZarrToZarr(per_file, concat_dims=[],
                                identical_dims=["lat", "lon", "bands"]).translate()
     
-    url_basename = url_basename.strip('/')
+    old_templates = combined.pop("templates", {})
     
+    # map using templates
+    # e.g., "emit20220818t020924-l3-obs.nc" -> "{{u}}/emit20220818t020924-l3-obs.nc"
+    name_to_template = {os.path.basename(p): f"{{{{u}}}}/{os.path.basename(p)}" for p in paths}
+    
+    # Walk through the final references and forcefully update the URLs
+    for k, v in combined.get("refs", {}).items():
+        # Check if v is a chunk reference [url, offset, size]
+        if isinstance(v, list) and len(v) >= 1 and isinstance(v[0], str):
+            url_val = v[0]
+            
+            # expand Kerchunk
+            for tk, tv in old_templates.items():
+                url_val = url_val.replace(f"{{{{{tk}}}}}", tv)
+                
+            # replace literals with url
+            for basename, new_url in name_to_template.items():
+                if basename in url_val:
+                    url_val = new_url
+                    break
+                    
+            v[0] = url_val
+            
+    # inject our templates to the root of the sidecar payload
+    url_basename = url_basename.strip('/')
     fid = os.path.splitext(os.path.basename(paths[0]))[0]
 
-    # Inject templates to the root of the sidecar payload
     combined["templates"] = {
         "u": f"s3://{url_basename}/{fid}",
         "u_https_hint": f"https://data.lpdaac.earthdatacloud.nasa.gov/{url_basename}/{fid}"
@@ -318,7 +328,6 @@ def write_combined_sidecar(paths, sidecar_path, url_basename="lp-prod-protected/
     with open(sidecar_path, "w") as f:
         json.dump(combined, f, indent=2)
     logging.info(f"combined sidecar: {os.path.basename(sidecar_path)}")
-
 
 def main():
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, description='''This script \
