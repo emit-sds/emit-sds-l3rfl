@@ -277,18 +277,25 @@ def finalize_layout(path):
     os.replace(tmp_path, path)
     logging.info(f"finalized layout: {os.path.basename(path)}")
 
+def formalize_emit_name(path, version):
+    return f'EMIT_L3_{path.split("_")[2].upper()}_{version.replace("V", "")}_{path.split("_")[0].replace("emit","").upper()}.nc'
 
-def write_combined_sidecar(paths, sidecar_path, url_basename="lp-prod-protected/EMITL2ARFL.002"):
+def write_combined_sidecar(paths, sidecar_path, version, url_basename="lp-prod-protected/EMITL2ARFL"):
     """
     Write an integrated kerchunk sidecar json file on the common grid,
     with template URL resolution.
 
     paths[0] must be the base (e.g. reflectance)
     """
+
+    # paths come in as emit20220818t020924_l3_rfl and translate to EMIT_L3_RFL_002_20220818T020924.nc
+    paths_formatted = []
+    for p in paths:
+        paths_formatted.append(formalize_emit_name(p, version))
     
     # Generate dictionaries - may have lingering basenames
     per_file = [SingleHdf5ToZarr(p, inline_threshold=0).translate()
-                for p in paths]
+                for p in paths_formatted]
     
     combined = MultiZarrToZarr(per_file, concat_dims=[],
                                identical_dims=["lat", "lon", "bands"]).translate()
@@ -297,7 +304,7 @@ def write_combined_sidecar(paths, sidecar_path, url_basename="lp-prod-protected/
     
     # map using templates
     # e.g., "emit20220818t020924-l3-obs.nc" -> "{{u}}/emit20220818t020924-l3-obs.nc"
-    name_to_template = {os.path.basename(p): f"{{{{u}}}}/{os.path.basename(p)}" for p in paths}
+    name_to_template = {os.path.basename(p): f"{{{{u}}}}/{os.path.basename(p)}" for p in paths_formatted}
     
     # Walk through the final references and forcefully update the URLs
     for k, v in combined.get("refs", {}).items():
@@ -319,7 +326,8 @@ def write_combined_sidecar(paths, sidecar_path, url_basename="lp-prod-protected/
             
     # inject our templates to the root of the sidecar payload
     url_basename = url_basename.strip('/')
-    fid = os.path.splitext(os.path.basename(paths[0]))[0]
+    url_basename = url_basename + "." + version.replace("V", "")
+    fid = os.path.splitext(os.path.basename(paths_formatted[0]))[0]
 
     combined["templates"] = {
         "u": f"s3://{url_basename}/{fid}",
@@ -691,7 +699,8 @@ each pixel in an acquisition."
     if args.sidecar:
         write_combined_sidecar(
             [args.rfl_output_filename, args.rfl_unc_output_filename, args.obs_output_filename],
-            os.path.splitext(args.rfl_output_filename)[0] + ".json")
+            os.path.splitext(args.rfl_output_filename)[0] + ".json",
+            args.version)
 
 
 if __name__ == "__main__":
