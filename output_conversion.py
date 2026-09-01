@@ -289,7 +289,7 @@ def write_combined_sidecar(paths, sidecar_path, version, url_basename="lp-prod-p
     """
 
     # Generate dictionaries - may have lingering basenames
-    per_file = [SingleHdf5ToZarr(p, inline_threshold=0).translate()
+    per_file = [SingleHdf5ToZarr(p, inline_threshold=5000).translate()
                 for p in paths]
     
     combined = MultiZarrToZarr(per_file, concat_dims=[],
