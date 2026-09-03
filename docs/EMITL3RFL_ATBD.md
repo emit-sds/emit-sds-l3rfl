@@ -177,7 +177,9 @@ The specific output files from the L3 Reflectance stage are:
 
 **III. A gridded observation file**, containing the `observation_parameters` group with eleven 2D layers on dimensions (lat, lon): path length, to-sensor azimuth and zenith, to-sun azimuth and zenith, solar phase, slope, aspect, cosine i, UTC time, and Earth-sun distance.
 
-**IV. A browse image**, a 3-band 8-bit RGB PNG.
+**IV. A combined reference sidecar file**, an optional fifth output written when the `--sidecar` flag is set. It is a Kerchunk reference JSON, named from the reflectance output basename with a `.json` extension, that indexes the internal chunk layout of all three gridded netCDF files in a single document. It carries no science data and is not required to read the products. It allows a client to open the reflectance, uncertainty, and observation files as a single virtual Zarr store and to fetch individual chunks by range request, so a user needing a few bands or a small spatial subset retrieves only those bytes rather than downloading the granule.
+
+**V. A browse image**, a 3-band 8-bit RGB PNG.
 
 | Output file          | Format                                                          | Interpretation                                        |
 | -------------------- | --------------------------------------------------------------- | ----------------------------------------------------- |
@@ -191,6 +193,8 @@ The specific output files from the L3 Reflectance stage are:
 All data variables carry `_FillValue = -9999` and `grid_mapping = "crs"`. Global attributes are inherited from the corresponding input ENVI metadata and augmented with a product title, a summary, and `ncei_template_version = "NCEI_NetCDF_Grid_Template_v2.0"`.
 
 All gridded data variables share the same storage settings. Values are quantized with `least_significant_digit` set to 5, retaining five decimal places to improve compressibility. Variables are chunked at 10 x 256 x 256 in the (bands, lat, lon) case and 256 x 256 in the two-dimensional (lat, lon) case, and are written with zlib compression at complevel 1. The chunk shape spans a block of ten contiguous channels over a 256 by 256 spatial tile, which suits both spectral access at a point and spatial access in a band.
+
+
 
 ## **5. Calibration, uncertainty characterization and propagation, and validation**
 
