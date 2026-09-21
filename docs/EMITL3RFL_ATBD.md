@@ -1,4 +1,4 @@
-JPL D-TBD
+JPL D-1002715
 ATBD-EMIT-L3RFL
 
 # Earth Surface Mineral dust source InvesTigation (EMIT)
@@ -7,8 +7,17 @@ ATBD-EMIT-L3RFL
 
 ### Algorithm Theoretical Basis Document
 
+Documentation authors:
+
+Adam Chlus<sup>1</sup>, Philip G. Brodrick<sup>1</sup>, Sarah R. Lundeen<sup>1</sup>, and Winston Olson-Duvall<sup>1</sup> 
+
+<sup>1</sup> Jet Propulsion Laboratory, California Institute of Technology
+
+Version 2.0
+August 2026
+
 **Version:** 0.1
-**Release Date:** TBD
+**Release Date:** 09/21/2026
 
 Jet Propulsion Laboratory
 California Institute of Technology
@@ -44,7 +53,25 @@ Pasadena, California 91109
 
 ## **1. Key Team Members**
 
-The EMIT Science Data System team at the Jet Propulsion Laboratory, California Institute of Technology, developed and maintains the L3 gridding stage. The algorithm outputs it uses are documented in the EMIT L2A Reflectance ATBD and the EMIT L2A Mask ATBD. 
+The EMIT Science Data System team at the Jet Propulsion Laboratory, California Institute of Technology, developed and maintains the L3 gridding stage. The algorithm outputs it uses are documented in the [EMIT L2A Reflectance ATBD](https://github.com/emit-sds/emit-sds-l2a/blob/develop/docs/EMITL2A_ATBD.md) and the [EMIT L2A Mask ATBD](https://github.com/emit-sds/emit-sds-masks/blob/develop/docs/EMIT_L2A_Mask_ATBD.md).
+
+Dataset authorship for this product follows the L2A reflectance product, as the input to this product. The dataset authors are:
+
+- **Philip G. Brodrick** (Jet Propulsion Laboratory)
+- **David R. Thompson** (Jet Propulsion Laboratory)
+- **Evan Greenberg** (Jet Propulsion Laboratory)
+- **Niklas Bohn** (Jet Propulsion Laboratory)
+- **James Montgomery** (Jet Propulsion Laboratory)
+- **Brent Wilder** (Jet Propulsion Laboratory)
+- **Sarah R. Lundeen** (Jet Propulsion Laboratory)
+- **Winston Olson-Duvall** (Jet Propulsion Laboratory)
+- **Adam Chlus** (Jet Propulsion Laboratory)
+- **Roger N. Clark** (Planetary Science Institute)
+- **Raymond F. Kokaly** (U.S. Geological Survey)
+- **Gregory S. Okin** (University of California, Los Angeles)
+- **Olga Kalashnikova** (Jet Propulsion Laboratory)
+- **Thomas H. Painter** (Jet Propulsion Laboratory)
+- **Robert O. Green** (Jet Propulsion Laboratory)
 
 ## **2. Historical Context and Background on the EMIT Mission and its Instrumentation**
 
