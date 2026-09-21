@@ -3,8 +3,8 @@
 ## Level 3 Gridded Reflectance Product User Guide
 
 **Version:** 
-**Release Date:** TBD
-**JPL-D-TBD**
+**Release Date:** 09/21/2026
+**JPL-D-1002716**
 
 Jet Propulsion Laboratory
 California Institute of Technology
@@ -14,7 +14,7 @@ Pasadena, California 91109
 
 | Version | Date       | Comments      |
 | ------- | ---------- | ------------- |
-| x.x     | YYYY-MM-DD | Initial release |
+| 0.1     | 2026-09-21 | Initial release |
 
 ## Table of Contents
 
