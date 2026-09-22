@@ -27,7 +27,7 @@ Pasadena, California 91109
 
 | Version | Date       | Comments      |
 | ------- | ---------- | ------------- |
-| X.X     | YYYY-MM-DD |  |
+| 0.1     | 2026-09-21 | Initial release |
 
 
 ## Table of Contents
